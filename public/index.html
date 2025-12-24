@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#10B981">
+    <title>茶溪有灵 - 乡村数字治理</title>
+    
+    <!-- 核心依赖 (保持联网) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+    
+    <style>
+        :root { --primary: #10B981; --bg-gray: #F5F7FA; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background-color: var(--bg-gray); color: #333; -webkit-font-smoothing: antialiased; user-select: none; -webkit-tap-highlight-color: transparent; }
+        
+        /* 滚动条隐藏 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        [v-cloak] { display: none !important; }
+        
+        /* 交互动效 */
+        .tap-scale { transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; }
+        .tap-scale:active { transform: scale(0.96); opacity: 0.9; }
+        
+        .card-shadow { box-shadow: 0 4px 20px rgba(0,0,0,0.03); }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        .safe-top { padding-top: env(safe-area-inset-top); }
+
+        /* 微信分享卡片模拟 */
+        .wx-share-card { 
+            background: #fff; 
+            padding: 12px; 
+            border-radius: 6px; 
+            display: flex; 
+            align-items: center; 
+            gap: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #eee;
+            max-width: 280px;
+            margin: 0 auto;
+        }
+        .wx-card-thumb { width: 50px; height: 50px; background: #f0f0f0; object-fit: cover; flex-shrink: 0; }
+        .wx-card-content { flex: 1; min-width: 0; text-align: left; }
+        .wx-arrow { position: absolute; right: 20px; top: 20px; width: 60px; opacity: 0.8; animation: float 1.5s infinite; }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden bg-[#F5F7FA]">
+
+<div id="app" v-cloak class="h-full w-full flex flex-col relative">
+
+    <!-- ================= 主视图区域 ================= -->
+    <div class="flex-1 overflow-y-auto no-scrollbar relative" id="main-scroll">
+        
+        <!-- 1. 搜索页 (优化：全屏覆盖 + 动画) -->
+        <transition enter-active-class="animate__animated animate__fadeInRight animate__faster" leave-active-class="animate__animated animate__fadeOutRight animate__faster">
+            <div v-if="isSearching" class="fixed inset-0 bg-white z-[60] flex flex-col h-full">
+                <header class="px-4 h-14 flex items-center border-b border-slate-100 bg-white shrink-0">
+                    <button @click="exitSearch" class="w-8 h-8 flex items-center justify-center text-slate-600 tap-scale"><i class="fa-solid fa-chevron-left"></i></button>
+                    <div class="flex-1 mx-2 bg-slate-100 h-9 rounded-full px-4 flex items-center gap-2">
+                        <i class="fa-solid fa-magnifying-glass text-slate-400 text-xs"></i>
+                        <input v-model="searchQuery" @input="performSearch" ref="searchInput" type="text" placeholder="搜索动态、通知..." class="flex-1 bg-transparent text-sm outline-none">
+                        <i v-if="searchQuery" @click="searchQuery=''" class="fa-solid fa-circle-xmark text-slate-400 text-sm tap-scale"></i>
+                    </div>
+                    <span @click="performSearch" class="text-sm font-bold text-emerald-600 tap-scale">搜索</span>
+                </header>
+                
+                <div class="flex-1 overflow-y-auto p-4">
+                    <!-- 搜索结果 -->
+                    <div v-if="searchResults.length > 0">
+                        <div class="text-xs text-slate-400 mb-3 font-medium">搜索结果 ({{ searchResults.length }})</div>
+                        <div class="space-y-3">
+                            <div v-for="item in searchResults" :key="item.id" @click="viewDetail(item); isSearching=false" class="bg-white p-3 rounded-xl border border-slate-100 shadow-sm tap-scale flex gap-3">
+                                <div v-if="item.images[0]" class="w-16 h-16 rounded-lg bg-slate-100 shrink-0 overflow-hidden">
+                                    <img :src="item.images[0]" class="w-full h-full object-cover">
+                                </div>
+                                <div class="flex-1 min-w-0 flex flex-col justify-center">
+                                    <h4 class="font-bold text-slate-800 text-sm mb-1 truncate" v-html="highlight(item.title)"></h4>
+                                    <div class="flex justify-between items-center text-[10px] text-slate-400">
+                                        <span>{{ item.user }}</span>
+                                        <span class="bg-slate-100 px-1.5 py-0.5 rounded text-emerald-600">{{ item.tag }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 空状态 -->
+                    <div v-else-if="searchQuery" class="flex flex-col items-center justify-center mt-20 text-slate-300">
+                        <i class="fa-regular fa-folder-open text-4xl mb-2"></i>
+                        <p class="text-xs">没有找到相关内容</p>
+                    </div>
+                    <!-- 初始状态 -->
+                    <div v-else class="mt-4">
+                        <div class="text-xs font-bold text-slate-800 mb-3">热门搜索</div>
+                        <div class="flex flex-wrap gap-2">
+                            <span @click="searchQuery='大扫除';performSearch()" class="px-3 py-1 bg-slate-100 rounded-full text-xs text-slate-600 tap-scale">大扫除</span>
+                            <span @click="searchQuery='茶叶';performSearch()" class="px-3 py-1 bg-slate-100 rounded-full text-xs text-slate-600 tap-scale">茶叶采摘</span>
+                            <span @click="searchQuery='路灯';performSearch()" class="px-3 py-1 bg-slate-100 rounded-full text-xs text-slate-600 tap-scale">设施报修</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 2. 首页 (Home) -->
+        <div v-if="activeTab === 'home'" class="pb-24 animate__animated animate__fadeIn">
+            <!-- 沉浸式顶部 -->
+            <header class="sticky top-0 z-20 px-4 pt-safe-top pb-3 bg-[#F5F7FA]/90 backdrop-blur-md transition-all border-b border-transparent" :class="scrollY > 10 ? 'shadow-sm border-slate-200' : ''">
+                <div class="flex items-center gap-3 pt-3">
+                    <div class="flex flex-col">
+                        <span class="text-[9px] text-emerald-600 font-bold tracking-widest uppercase">Digital Village</span>
+                        <h1 class="text-xl font-black text-slate-800 font-serif leading-none">茶溪有灵</h1>
+                    </div>
+                    <!-- 搜索入口 -->
+                    <div @click="enterSearch" class="flex-1 bg-white rounded-full h-9 flex items-center px-3 shadow-sm border border-slate-200/60 ml-2 tap-scale">
+                        <i class="fa-solid fa-magnifying-glass text-slate-300 text-xs"></i>
+                        <span class="text-slate-400 text-xs ml-2">搜村务、找动态...</span>
+                    </div>
+                    <div class="w-9 h-9 bg-white rounded-full flex items-center justify-center shadow-sm relative tap-scale">
+                        <i class="fa-regular fa-bell text-slate-600"></i>
+                        <span v-if="hasNotification" class="absolute top-2 right-2 w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- 轮播图 -->
+            <div class="mt-4 px-4">
+                <div class="w-full h-40 rounded-2xl overflow-hidden shadow-sm relative bg-white">
+                    <div class="flex overflow-x-auto h-full no-scrollbar snap-x snap-mandatory">
+                        <div v-for="(banner, index) in banners" :key="index" class="min-w-full h-full snap-center relative p-1">
+                            <div class="w-full h-full rounded-xl flex flex-col items-center justify-center text-white relative overflow-hidden bg-cover bg-center" :class="banner.colorClass">
+                                <div class="absolute inset-0 bg-black/10"></div>
+                                <div class="relative z-10 text-center">
+                                    <i class="fa-regular fa-image text-3xl mb-2 opacity-80"></i>
+                                    <h3 class="font-bold text-lg">{{ banner.title }}</h3>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 村务公开 (修复BUG：现在能显示内容了) -->
+            <div class="mt-4 px-4">
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div @click="navigateToCategory(villageAffairsMenu)" class="bg-gradient-to-r from-cyan-50 to-blue-50 px-4 py-3 flex justify-between items-center cursor-pointer tap-scale">
+                        <div class="flex items-center gap-2">
+                            <span class="w-1 h-4 bg-cyan-500 rounded-full"></span>
+                            <h3 class="font-black text-slate-800 text-sm">村务公开</h3>
+                            <span class="text-[9px] text-cyan-600 bg-white/60 px-1.5 py-0.5 rounded border border-cyan-100">官方发布</span>
+                        </div>
+                        <span class="text-xs text-slate-400 flex items-center">进入专栏 <i class="fa-solid fa-chevron-right ml-1 text-[10px]"></i></span>
+                    </div>
+                    <div class="p-2">
+                        <div v-if="latestVillageNews.length > 0">
+                            <div v-for="(news, idx) in latestVillageNews" :key="news.id" @click="viewDetail(news)" class="flex items-center gap-3 p-3 rounded-xl active:bg-slate-50 transition-colors cursor-pointer border-b border-dashed border-slate-100 last:border-0 last:pb-1">
+                                <div class="flex-1 min-w-0">
+                                    <h4 class="font-bold text-slate-700 text-sm truncate">{{ news.title }}</h4>
+                                    <div class="flex items-center gap-2 mt-1">
+                                        <span class="text-[10px] text-slate-400">{{ formatTime(news.timestamp) }}</span>
+                                        <span class="text-[9px] bg-red-50 text-red-600 px-1 rounded border border-red-100">置顶</span>
+                                    </div>
+                                </div>
+                                <div v-if="news.images && news.images.length > 0" class="w-10 h-10 rounded-lg bg-slate-100 shrink-0 overflow-hidden">
+                                    <img :src="news.images[0]" class="w-full h-full object-cover">
+                                </div>
+                            </div>
+                        </div>
+                        <div v-else class="text-center py-4 text-xs text-slate-300">暂无最新村务公告</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 金刚区菜单 -->
+            <div class="mt-4 px-4">
+                <div class="grid grid-cols-4 gap-4 bg-white p-4 rounded-2xl card-shadow border border-slate-50">
+                    <div v-for="menu in commonMenus" :key="menu.name" @click="navigateToCategory(menu)" class="flex flex-col items-center gap-2 tap-scale">
+                        <div class="w-11 h-11 rounded-[14px] flex items-center justify-center text-xl text-white shadow-sm transition-transform" :class="menu.color">
+                            <i :class="menu.icon"></i>
+                        </div>
+                        <span class="text-[11px] font-medium text-slate-600 whitespace-nowrap">{{ menu.name }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 动态列表 (支持筛选) -->
+            <div class="mt-8 px-4">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+                        <span class="w-1 h-4 bg-emerald-500 rounded-full"></span>
+                        {{ currentFeedTab === '我的发布' ? '我的发布记录' : '村民动态' }}
+                    </h3>
+                    <div v-if="currentFeedTab !== '全部'" @click="currentFeedTab = '全部'" class="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-full cursor-pointer flex items-center gap-1">
+                        <span>已筛选: {{currentFeedTab}}</span><i class="fa-solid fa-xmark"></i>
+                    </div>
+                </div>
+                
+                <div class="space-y-4 pb-6">
+                    <div v-for="item in filteredFeedList" :key="item.id" @click="viewDetail(item)" class="bg-white rounded-2xl p-4 card-shadow tap-scale border border-slate-50">
+                        <!-- 头部 -->
+                        <div class="flex items-center gap-2 mb-3">
+                            <img :src="item.avatar" class="w-8 h-8 rounded-full bg-slate-100 border border-slate-100">
+                            <div class="flex flex-col">
+                                <span class="text-xs font-bold text-slate-800">{{ item.user }}</span>
+                                <span class="text-[10px] text-slate-400">{{ formatTime(item.timestamp) }}</span>
+                            </div>
+                            <span v-if="item.user_id === 998" class="ml-auto text-[9px] bg-cyan-50 text-cyan-600 px-1.5 py-0.5 rounded border border-cyan-100">官方</span>
+                        </div>
+                        <!-- 内容 -->
+                        <h4 class="font-bold text-slate-800 text-[15px] leading-snug mb-2">{{ item.title }}</h4>
+                        <!-- 图片网格 -->
+                        <div v-if="item.images.length > 0" class="grid gap-1.5 rounded-xl overflow-hidden mt-2 mb-2" :class="item.images.length > 1 ? 'grid-cols-3' : 'grid-cols-1'">
+                             <div v-for="(img, idx) in item.images.slice(0, 3)" :key="idx" class="relative aspect-square bg-slate-100 rounded-lg overflow-hidden">
+                                <img :src="img" class="w-full h-full object-cover">
+                                <div v-if="idx === 2 && item.images.length > 3" class="absolute inset-0 bg-black/50 flex items-center justify-center text-white font-bold text-lg backdrop-blur-[1px]">+{{ item.images.length - 3 }}</div>
+                            </div>
+                        </div>
+                        <!-- 底部 -->
+                        <div class="flex items-center justify-between text-slate-400 text-xs mt-2 pt-2 border-t border-slate-50">
+                            <span class="bg-slate-50 px-2 py-0.5 rounded text-[10px] text-slate-500"># {{ item.tag }}</span>
+                            <div class="flex gap-4">
+                                <span class="flex items-center gap-1"><i class="fa-regular fa-comment"></i> {{ item.comments }}</span>
+                                <span class="flex items-center gap-1"><i :class="item.isLiked ? 'fa-solid text-red-500' : 'fa-regular'" @click.stop="quickLike(item)" class="fa-thumbs-up"></i> {{ item.likes }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 空状态 -->
+                    <div v-if="filteredFeedList.length === 0" class="text-center py-10 text-slate-300">
+                        <i class="fa-regular fa-folder-open text-2xl mb-2"></i>
+                        <p class="text-xs">暂无相关动态</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 个人中心 (Profile) -->
+        <div v-if="activeTab === 'profile'" class="min-h-full bg-[#F5F7FA] pb-32 animate__animated animate__fadeIn">
+            <div class="h-64 bg-gradient-to-br from-emerald-600 to-teal-700 relative overflow-hidden">
+                <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
+                <button @click="openSettings" class="absolute top-safe-top right-4 mt-3 w-10 h-10 rounded-full flex items-center justify-center text-white/90 text-lg tap-scale z-20 hover:bg-white/10">
+                    <i class="fa-solid fa-gear"></i>
+                </button>
+            </div>
+            
+            <div class="px-4 -mt-24 relative z-10">
+                <div class="bg-white rounded-3xl p-6 card-shadow flex flex-col gap-6 backdrop-blur-xl bg-white/95 border border-white/50">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <div class="w-16 h-16 rounded-full border-4 border-white shadow-md overflow-hidden -mt-10 bg-slate-100 relative group">
+                                <img :src="userProfile.avatar" class="w-full h-full object-cover">
+                            </div>
+                            <div class="-mt-4">
+                                <h2 class="text-xl font-black text-slate-800">{{ userProfile.name }}</h2>
+                                <div class="flex items-center gap-2 mt-1">
+                                    <span class="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded-full font-bold border border-emerald-200 flex items-center">
+                                        <i class="fa-solid fa-check-circle mr-1"></i>{{ userProfile.phone ? '已认证村民' : '未认证' }}
+                                    </span>
+                                    <span v-if="userProfile.id === 998" class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold border border-blue-200">村委管理员</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 数据概览 -->
+                    <div class="flex justify-around border-t border-slate-50 pt-4">
+                        <div @click="currentFeedTab='我的发布';activeTab='home'" class="text-center tap-scale"><div class="font-bold text-lg text-slate-800">{{ myPostCount }}</div><div class="text-xs text-slate-400">我的动态</div></div>
+                        <div class="text-center"><div class="font-bold text-lg text-slate-800">12</div><div class="text-xs text-slate-400">获赞</div></div>
+                        <div class="text-center"><div class="font-bold text-lg text-slate-800">5</div><div class="text-xs text-slate-400">收藏</div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-4 mt-6 space-y-4">
+                <!-- 绑定手机入口 -->
+                <div class="bg-white rounded-2xl overflow-hidden card-shadow">
+                    <button @click="openBindPhone" class="w-full flex items-center justify-between p-4 border-b border-slate-50 hover:bg-slate-50 tap-scale">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-full bg-green-50 text-green-500 flex items-center justify-center"><i class="fa-solid fa-mobile-screen"></i></div>
+                            <span class="text-sm font-bold text-slate-700">手机号码</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-slate-400">{{ userProfile.phone ? userProfile.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : '去绑定' }}</span>
+                            <i class="fa-solid fa-chevron-right text-xs text-slate-300"></i>
+                        </div>
+                    </button>
+                    <button @click="doLogout" class="w-full flex items-center justify-between p-4 hover:bg-red-50 transition-colors tap-scale group">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-full bg-red-50 text-red-500 group-hover:bg-red-100 flex items-center justify-center"><i class="fa-solid fa-arrow-right-from-bracket"></i></div>
+                            <span class="text-sm font-bold text-red-500">退出登录</span>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 弹窗/遮罩层 ================= -->
+
+    <!-- 1. 底部导航 -->
+    <div v-if="activeTab !== 'category' && !showDetailModal && !isSearching" class="h-16 bg-white border-t border-slate-100 flex items-center justify-around relative z-40 safe-bottom shrink-0 shadow-[0_-5px_15px_rgba(0,0,0,0.02)]">
+        <button @click="activeTab = 'home'" class="flex flex-col items-center gap-1 w-16 tap-scale" :class="activeTab === 'home' ? 'text-emerald-600' : 'text-slate-300'">
+            <i class="text-xl fa-solid fa-house"></i>
+            <span class="text-[10px] font-medium">首页</span>
+        </button>
+        <button @click="openPostModal" class="w-12 h-12 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl text-white shadow-lg shadow-emerald-500/40 flex items-center justify-center text-xl -mt-6 border-4 border-[#F5F7FA] tap-scale transform active:scale-95 transition-all">
+            <i class="fa-solid fa-plus"></i>
+        </button>
+        <button @click="activeTab = 'profile'" class="flex flex-col items-center gap-1 w-16 tap-scale" :class="activeTab === 'profile' ? 'text-emerald-600' : 'text-slate-300'">
+            <i class="text-xl fa-solid fa-user"></i>
+            <span class="text-[10px] font-medium">我的</span>
+        </button>
+    </div>
+
+    <!-- 2. 详情页 -->
+    <transition enter-active-class="animate__animated animate__slideInRight animate__faster" leave-active-class="animate__animated animate__slideOutRight animate__faster">
+        <div v-if="showDetailModal" class="fixed inset-0 z-50 bg-white flex flex-col h-full">
+            <div class="px-4 h-14 flex items-center justify-between border-b border-slate-50 bg-white/95 backdrop-blur z-10 shrink-0">
+                <button @click="closeDetail" class="w-8 h-8 flex items-center justify-center -ml-2 text-slate-600 tap-scale"><i class="fa-solid fa-arrow-left"></i></button>
+                <div class="flex items-center gap-2">
+                    <img :src="detailItem.avatar" class="w-6 h-6 rounded-full bg-slate-100">
+                    <span class="text-sm font-bold text-slate-700">{{ detailItem.user }}</span>
+                </div>
+                <!-- 转发分享按钮 -->
+                <button @click="showShareSheet = true" class="w-8 h-8 flex items-center justify-center text-slate-700 tap-scale"><i class="fa-solid fa-share-nodes"></i></button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto bg-white pb-24">
+                <div v-if="detailItem.images && detailItem.images.length > 0" class="w-full bg-slate-50">
+                    <img v-for="(img, idx) in detailItem.images" :key="idx" :src="img" class="w-full h-auto max-h-[60vh] object-contain">
+                </div>
+                <div class="p-5">
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-600 font-medium"># {{ detailItem.tag }}</span>
+                        <span class="text-xs text-slate-300">{{ formatTime(detailItem.timestamp) }}</span>
+                    </div>
+                    <h1 class="text-xl font-black text-slate-900 leading-snug mb-4">{{ detailItem.title }}</h1>
+                    <p class="text-[15px] text-slate-700 leading-relaxed whitespace-pre-wrap">{{ detailItem.description }}</p>
+                </div>
+                
+                <div class="border-t border-slate-100 p-5 min-h-[200px]">
+                    <h4 class="font-bold text-slate-800 text-sm mb-4">全部评论 ({{ detailItem.commentList ? detailItem.commentList.length : 0 }})</h4>
+                    <div v-if="detailItem.commentList && detailItem.commentList.length" class="space-y-5">
+                        <div v-for="c in detailItem.commentList" :key="c.id" class="flex gap-3">
+                            <img :src="c.avatar" class="w-8 h-8 rounded-full bg-slate-100 shrink-0">
+                            <div class="flex-1">
+                                <div class="flex justify-between items-baseline">
+                                    <span class="text-xs font-bold text-slate-600">{{ c.user }}</span>
+                                    <span class="text-[10px] text-slate-400">{{ c.time }}</span>
+                                </div>
+                                <p class="text-sm text-slate-700 mt-1">{{ c.content }}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="text-center py-8 text-slate-300 text-xs">
+                        <i class="fa-regular fa-comment-dots text-2xl mb-2"></i>
+                        <p>还没有人评论，快来抢沙发</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="absolute bottom-0 left-0 w-full bg-white border-t border-slate-100 p-3 flex items-center gap-3 safe-bottom z-20 shadow-[0_-5px_15px_rgba(0,0,0,0.02)]">
+                <input v-model="commentText" @keyup.enter="postComment" type="text" placeholder="写下你的想法..." class="flex-1 bg-slate-100 rounded-full h-9 px-4 text-xs outline-none focus:ring-2 focus:ring-emerald-100 transition-all">
+                <button @click="postComment" class="text-emerald-600 text-sm font-bold px-2" v-if="commentText">发送</button>
+                <button @click="toggleLike" class="tap-scale flex flex-col items-center min-w-[40px] gap-0.5 text-slate-400" :class="detailItem.isLiked ? 'text-pink-500' : ''">
+                    <i :class="detailItem.isLiked ? 'fa-solid' : 'fa-regular'" class="fa-thumbs-up text-xl"></i>
+                    <span class="text-[9px]">{{ detailItem.likes }}</span>
+                </button>
+            </div>
+        </div>
+    </transition>
+
+    <!-- 3. 发布弹窗 -->
+    <transition enter-active-class="animate__animated animate__slideInUp animate__faster" leave-active-class="animate__animated animate__slideOutDown animate__faster">
+        <div v-if="showPostModal" class="fixed inset-0 z-50 bg-[#F5F7FA] flex flex-col h-full">
+            <div class="px-4 h-14 flex items-center justify-between bg-white border-b border-slate-100 shrink-0">
+                <button @click="showPostModal = false" class="text-slate-500 text-sm font-medium px-2 py-1">取消</button>
+                <span class="font-bold text-slate-800 text-base">发布动态</span>
+                <button @click="submitForm" class="bg-emerald-500 text-white px-5 py-1.5 rounded-full text-sm font-bold shadow-md shadow-emerald-500/20 active:scale-95 transition-transform">发布</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+                <div class="bg-white p-4 rounded-2xl shadow-sm">
+                    <input v-model="form.title" type="text" placeholder="标题 (必填)" class="w-full text-lg font-bold outline-none mb-3 border-b border-slate-50 pb-2 focus:border-emerald-200 transition-colors">
+                    <textarea v-model="form.description" class="w-full h-32 bg-slate-50 rounded-xl p-3 text-sm outline-none resize-none" placeholder="分享村里的新鲜事..."></textarea>
+                </div>
+                <div class="bg-white p-4 rounded-2xl shadow-sm">
+                    <div class="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">发布板块</div>
+                    <div class="flex flex-wrap gap-2">
+                        <button v-for="tag in tags" :key="tag" @click="selectTag(tag)" class="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all" :class="form.department === tag ? 'border-emerald-500 bg-emerald-50 text-emerald-600' : 'border-slate-100 bg-slate-50 text-slate-500'">
+                            {{ tag }}
+                        </button>
+                    </div>
+                    <!-- 权限警告 -->
+                    <div v-if="form.department === '村务公开' && userProfile.id !== 998" class="mt-3 bg-red-50 text-red-500 text-[10px] p-2 rounded-lg flex items-start gap-2 border border-red-100">
+                        <i class="fa-solid fa-circle-exclamation mt-0.5"></i>
+                        <div><span class="font-bold">权限受限：</span>您当前是普通村民身份，无法发布“村务公开”信息。请联系村管理员发布。</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </transition>
+
+    <!-- 4. 设置页面 -->
+    <transition enter-active-class="animate__animated animate__slideInRight animate__faster" leave-active-class="animate__animated animate__slideOutRight animate__faster">
+        <div v-if="showSettingsModal" class="fixed inset-0 z-50 bg-[#F5F7FA] flex flex-col h-full">
+            <header class="px-4 h-14 flex items-center border-b border-slate-100 bg-white">
+                <button @click="showSettingsModal = false" class="w-8 h-8 flex items-center justify-center text-slate-600"><i class="fa-solid fa-arrow-left"></i></button>
+                <h3 class="font-bold text-lg ml-2">系统设置</h3>
+            </header>
+            <div class="p-4 space-y-4">
+                <!-- 开发者调试工具 -->
+                <div class="bg-white rounded-xl p-4 shadow-sm border border-emerald-100 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 bg-emerald-100 text-emerald-600 text-[9px] px-2 py-1 rounded-bl-lg font-bold">DEBUG</div>
+                    <h4 class="text-xs font-bold text-slate-800 mb-3">身份模拟 (开发调试用)</h4>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button @click="switchUser('normal')" class="py-2 rounded-lg border text-xs font-bold transition-colors" :class="userProfile.id !== 998 ? 'bg-slate-800 text-white border-slate-800' : 'border-slate-200 text-slate-500'">模拟村民</button>
+                        <button @click="switchUser('admin')" class="py-2 rounded-lg border text-xs font-bold transition-colors" :class="userProfile.id === 998 ? 'bg-emerald-600 text-white border-emerald-600' : 'border-slate-200 text-slate-500'">模拟管理员</button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl overflow-hidden shadow-sm">
+                    <div class="flex items-center justify-between p-4 border-b border-slate-50">
+                        <span class="text-sm font-bold text-slate-700">接收消息通知</span>
+                        <div @click="settings.notifications = !settings.notifications" class="w-10 h-6 rounded-full relative cursor-pointer transition-colors" :class="settings.notifications ? 'bg-emerald-500' : 'bg-slate-200'">
+                            <div class="absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform shadow-sm" :class="settings.notifications ? 'translate-x-4' : ''"></div>
+                        </div>
+                    </div>
+                    <button @click="clearCache" class="w-full flex items-center justify-between p-4 text-left hover:bg-slate-50 active:bg-slate-100">
+                        <span class="text-sm font-bold text-slate-700">清除本地缓存</span>
+                        <span class="text-xs text-slate-400">{{ cacheSize }} MB</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </transition>
+
+    <!-- 5. 绑定手机号弹窗 -->
+    <div v-if="showBindPhoneModal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate__animated animate__fadeIn">
+        <div class="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate__animated animate__zoomIn animate__faster">
+            <h3 class="text-lg font-bold text-slate-800 mb-1 text-center">绑定手机号</h3>
+            <p class="text-xs text-slate-400 text-center mb-5">绑定后可享受更多村民服务</p>
+            <div class="space-y-4">
+                <input v-model="bindPhoneForm.phone" type="tel" placeholder="请输入11位手机号" class="w-full bg-slate-50 rounded-xl px-4 py-3 outline-none text-sm focus:ring-1 focus:ring-emerald-500">
+                <div class="flex gap-2">
+                    <input v-model="bindPhoneForm.code" type="text" placeholder="验证码" class="flex-1 bg-slate-50 rounded-xl px-4 py-3 outline-none text-sm focus:ring-1 focus:ring-emerald-500">
+                    <button @click="sendCode" :disabled="countdown > 0" class="w-24 text-xs font-bold rounded-xl transition-colors" :class="countdown > 0 ? 'bg-slate-100 text-slate-400' : 'bg-emerald-50 text-emerald-600'">
+                        {{ countdown > 0 ? countdown + 's' : '获取' }}
+                    </button>
+                </div>
+            </div>
+            <div class="flex gap-3 mt-6">
+                <button @click="showBindPhoneModal = false" class="flex-1 bg-slate-50 text-slate-600 py-3 rounded-xl text-sm font-bold">取消</button>
+                <button @click="confirmBindPhone" class="flex-1 bg-emerald-500 text-white py-3 rounded-xl text-sm font-bold shadow-lg shadow-emerald-500/30">立即绑定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 6. 微信分享遮罩 (美化版) -->
+    <div v-if="showShareSheet" class="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex flex-col justify-end" @click.self="showShareSheet = false">
+        <img src="https://i.ibb.co/hMVwz0X/arrow.png" class="wx-arrow text-white w-16 absolute top-5 right-8 invert brightness-0 grayscale-0 sepia-0">
+        
+        <div class="p-8 text-center text-white mb-20 animate__animated animate__fadeInUp">
+            <div class="text-lg font-bold mb-2">点击右上角菜单</div>
+            <div class="text-sm opacity-80 mb-8">选择 [发送给朋友] 或 [分享到朋友圈]</div>
+            
+            <!-- 模拟卡片 -->
+            <div class="wx-share-card">
+                <img :src="shareData.img" class="wx-card-thumb">
+                <div class="wx-card-content">
+                    <div class="text-sm text-slate-800 font-bold line-clamp-2 leading-tight mb-1">{{ shareData.title }}</div>
+                    <div class="text-[10px] text-slate-400 line-clamp-1">茶溪有灵 · 乡村数字社区</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-white p-4 pb-safe-bottom rounded-t-2xl animate__animated animate__slideInUp animate__faster">
+             <button @click="showShareSheet = false" class="w-full py-3 bg-slate-100 rounded-xl text-slate-600 font-bold text-sm">取消分享</button>
+        </div>
+    </div>
+
+    <!-- 全局提示 (Toast) -->
+    <div v-if="toastMsg" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[80] bg-black/80 text-white px-5 py-2.5 rounded-full text-xs font-medium animate__animated animate__fadeIn shadow-xl flex items-center gap-2 backdrop-blur-sm">
+        <i class="fa-solid fa-circle-info"></i> {{ toastMsg }}
+    </div>
+
+</div>
+
+<script>
+    const { createApp, reactive, ref, computed, nextTick } = Vue;
+    createApp({
+        setup() {
+            // === 状态管理 ===
+            const activeTab = ref('home');
+            const showPostModal = ref(false);
+            const showDetailModal = ref(false);
+            const showSettingsModal = ref(false);
+            const showBindPhoneModal = ref(false);
+            const showShareSheet = ref(false);
+            const isSearching = ref(false);
+            const scrollY = ref(0);
+            
+            const toastMsg = ref('');
+            const searchQuery = ref('');
+            const searchResults = ref([]);
+            const commentText = ref('');
+            const bindPhoneForm = reactive({ phone: '', code: '' });
+            const countdown = ref(0);
+            const settings = reactive({ notifications: true });
+            const cacheSize = ref('12.5');
+
+            // === 用户数据 ===
+            const userProfile = reactive({
+                id: 1, 
+                name: '村民张三',
+                avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=ZhangSan',
+                phone: ''
+            });
+
+            // === 分享数据 ===
+            const shareData = reactive({ title: '', desc: '', img: '' });
+
+            // === 模拟内容数据 ===
+            const feedList = ref([
+                {
+                    id: 1, title: "茶溪河畔樱花盛开，欢迎大家来打卡！", description: "这几天的天气真好，河边的樱花开得特别旺盛，周末可以带孩子来玩。", images: ["https://picsum.photos/400/300?random=1"], user: "村支书", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Leader", tag: "美景分享", timestamp: Date.now() - 3600000, user_id: 998, likes: 24, comments: 5, isLiked: false, commentList: []
+                },
+                {
+                    id: 2, title: "【重要通知】关于本周日全村环境大扫除的安排", description: "为了响应美丽乡村建设号召，本周日（27号）上午9点，请各户派代表参与村道清扫。", images: [], user: "村委会", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Admin", tag: "村务公开", timestamp: Date.now() - 86400000, user_id: 998, likes: 56, comments: 12, isLiked: false, commentList: []
+                },
+                {
+                    id: 3, title: "村东口的路灯坏了两天了，晚上太黑", description: "希望村委能尽快安排人来修一下，老人走路不方便。", images: ["https://picsum.photos/400/300?random=3"], user: "李大叔", avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=OldLi", tag: "环境报修", timestamp: Date.now() - 172800000, user_id: 100, likes: 8, comments: 2, isLiked: false, commentList: []
+                }
+            ]);
+
+            // === 配置项 ===
+            const banners = [{ title: '茶溪春色', colorClass: 'bg-gradient-to-br from-teal-400 to-emerald-500' }];
+            const villageAffairsMenu = { name: '村务公开', icon: 'fa-solid fa-bullhorn', color: 'bg-cyan-500' };
+            const commonMenus = [{ name: '环境报修', icon: 'fa-solid fa-wrench', color: 'bg-orange-400' }, { name: '矛盾调解', icon: 'fa-solid fa-handshake', color: 'bg-blue-400' }, { name: '政策咨询', icon: 'fa-solid fa-file-contract', color: 'bg-indigo-400' }, { name: '互助共享', icon: 'fa-solid fa-hand-holding-heart', color: 'bg-pink-400' }];
+            const tags = ["村务公开", "环境报修", "矛盾调解", "美景分享"];
+            
+            const currentFeedTab = ref('全部');
+            const detailItem = ref({});
+            const form = reactive({ title: '', description: '', images: [], department: '' });
+            const hasNotification = ref(true);
+
+            // === 计算属性 ===
+            // 修复点：添加了 latestVillageNews
+            const latestVillageNews = computed(() => {
+                return feedList.value.filter(i => i.tag === '村务公开').slice(0, 2);
+            });
+
+            const filteredFeedList = computed(() => {
+                let list = feedList.value;
+                if(currentFeedTab.value === '我的发布') {
+                    list = list.filter(i => i.user_id === userProfile.id);
+                } else if (currentFeedTab.value !== '全部') {
+                    list = list.filter(i => i.tag === currentFeedTab.value);
+                }
+                // 默认过滤掉村务公开（除非专门选了该分类），因为它有专门板块
+                if (currentFeedTab.value === '全部') {
+                     list = list.filter(i => i.tag !== '村务公开');
+                }
+                return list;
+            });
+
+            const myPostCount = computed(() => feedList.value.filter(i => i.user_id === userProfile.id).length);
+
+            // === 核心方法 ===
+            
+            // 搜索逻辑
+            const enterSearch = () => { isSearching.value = true; searchQuery.value = ''; searchResults.value = []; nextTick(() => document.querySelector('input[placeholder*="搜索"]')?.focus()); };
+            const exitSearch = () => { isSearching.value = false; searchQuery.value = ''; };
+            const performSearch = () => {
+                const q = searchQuery.value.toLowerCase();
+                if(!q) { searchResults.value = []; return; }
+                searchResults.value = feedList.value.filter(item => item.title.toLowerCase().includes(q) || item.user.toLowerCase().includes(q));
+            };
+            const highlight = (text) => text.replace(new RegExp(searchQuery.value, 'gi'), match => `<span class="text-emerald-600 bg-emerald-50 font-bold">${match}</span>`);
+
+            // 发布逻辑
+            const submitForm = () => {
+                if(!form.title) return showToastMsg('请输入标题');
+                if(form.department === '村务公开' && userProfile.id !== 998) return showToastMsg('权限不足：仅管理员可发布村务');
+                
+                feedList.value.unshift({
+                    id: Date.now(),
+                    title: form.title,
+                    description: form.description,
+                    images: form.images,
+                    user: userProfile.name,
+                    avatar: userProfile.avatar,
+                    tag: form.department || '其他',
+                    timestamp: Date.now(),
+                    user_id: userProfile.id,
+                    likes: 0,
+                    comments: 0,
+                    isLiked: false,
+                    commentList: []
+                });
+                showToastMsg('发布成功'); showPostModal.value = false; form.title=''; form.description='';
+            };
+
+            // 详情与分享
+            const viewDetail = (item) => {
+                detailItem.value = item;
+                showDetailModal.value = true;
+                shareData.title = item.title;
+                shareData.desc = item.description || '点击查看详情';
+                shareData.img = item.images[0] || 'https://via.placeholder.com/150';
+            };
+            const closeDetail = () => showDetailModal.value = false;
+            
+            // 互动
+            const toggleLike = () => { detailItem.value.isLiked = !detailItem.value.isLiked; detailItem.value.likes += detailItem.value.isLiked ? 1 : -1; };
+            const quickLike = (item) => { item.isLiked = !item.isLiked; item.likes += item.isLiked ? 1 : -1; showToastMsg(item.isLiked ? '已点赞' : '取消点赞'); };
+            const postComment = () => {
+                if(!commentText.value) return;
+                if(!detailItem.value.commentList) detailItem.value.commentList = [];
+                detailItem.value.commentList.unshift({ id: Date.now(), user: userProfile.name, avatar: userProfile.avatar, content: commentText.value, time: '刚刚' });
+                detailItem.value.comments++;
+                commentText.value = '';
+                showToastMsg('评论成功');
+            };
+
+            // 手机绑定
+            const openBindPhone = () => showBindPhoneModal.value = true;
+            const sendCode = () => {
+                if(!bindPhoneForm.phone) return showToastMsg('请输入手机号');
+                countdown.value = 60; showToastMsg('验证码已发送');
+                const t = setInterval(() => { countdown.value--; if(countdown.value<=0) clearInterval(t); }, 1000);
+            };
+            const confirmBindPhone = () => {
+                if(!bindPhoneForm.code) return showToastMsg('请输入验证码');
+                userProfile.phone = bindPhoneForm.phone;
+                showBindPhoneModal.value = false; showToastMsg('绑定成功');
+            };
+
+            // 系统设置与身份切换
+            const openSettings = () => showSettingsModal.value = true;
+            const clearCache = () => { cacheSize.value = '0'; showToastMsg('缓存已清理'); };
+            const switchUser = (type) => {
+                if(type === 'admin') { userProfile.id = 998; userProfile.name = '村委管理员'; userProfile.avatar = 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin'; }
+                else { userProfile.id = 1; userProfile.name = '村民张三'; userProfile.avatar = 'https://api.dicebear.com/7.x/avataaars/svg?seed=ZhangSan'; }
+                showToastMsg('身份已切换'); showSettingsModal.value = false;
+            };
+            const doLogout = () => { if(confirm('确定退出登录？')) location.reload(); };
+
+            // 工具
+            const showToastMsg = (msg) => { toastMsg.value = msg; setTimeout(() => toastMsg.value = '', 2000); };
+            const formatTime = (ts) => { const diff = Date.now()-ts; return diff<3600000 ? Math.floor(diff/60000)+'分钟前' : new Date(ts).toLocaleDateString(); };
+            const selectTag = (t) => form.department = t;
+            const navigateToCategory = (m) => { currentFeedTab.value = m.name; showToastMsg(`进入 ${m.name}`); };
+
+            // 滚动监听
+            window.addEventListener('scroll', (e) => { if(e.target.id === 'main-scroll') scrollY.value = e.target.scrollTop; }, true);
+
+            return {
+                activeTab, showPostModal, showDetailModal, showSettingsModal, showBindPhoneModal, showShareSheet, isSearching,
+                scrollY, toastMsg, searchQuery, searchResults, commentText, bindPhoneForm, countdown, settings, cacheSize,
+                userProfile, shareData, hasNotification, detailItem, form, banners, villageAffairsMenu, commonMenus, tags,
+                currentFeedTab, latestVillageNews, filteredFeedList, myPostCount,
+                enterSearch, exitSearch, performSearch, highlight, submitForm, viewDetail, closeDetail,
+                toggleLike, quickLike, postComment, openBindPhone, sendCode, confirmBindPhone,
+                openSettings, clearCache, switchUser, doLogout, selectTag, navigateToCategory, showToastMsg, formatTime, openPostModal: ()=>showPostModal.value=true
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
