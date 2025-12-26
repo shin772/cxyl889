@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>茶溪有灵 - 综合管理后台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        [v-cloak] { display: none; }
+        body { background-color: #F3F4F6; font-family: sans-serif; }
+    </style>
+</head>
+<body>
+    <div id="app" v-cloak class="min-h-screen flex flex-col">
+        
+        <div v-if="!token" class="flex-1 flex items-center justify-center bg-gradient-to-br from-emerald-600 to-teal-800">
+            <div class="bg-white p-8 rounded-2xl shadow-2xl w-96">
+                <div class="text-center mb-6">
+                    <h1 class="text-2xl font-black text-slate-800">茶溪有灵</h1>
+                    <p class="text-sm text-slate-400">数字乡村治理平台 · 管理后台</p>
+                </div>
+                <div class="space-y-4">
+                    <input v-model="loginForm.username" type="text" placeholder="管理员账号 (admin)" class="w-full border p-3 rounded-lg outline-none focus:border-emerald-500">
+                    <input v-model="loginForm.password" type="password" placeholder="密码 (admin123)" class="w-full border p-3 rounded-lg outline-none focus:border-emerald-500" @keyup.enter="handleLogin">
+                    <button @click="handleLogin" class="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition">安全登录</button>
+                </div>
+                <p v-if="errorMsg" class="text-red-500 text-center text-xs mt-4">{{ errorMsg }}</p>
+            </div>
+        </div>
+
+        <div v-else class="flex h-screen overflow-hidden">
+            <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-20">
+                <div class="h-16 flex items-center px-6 font-bold text-white text-lg border-b border-slate-800">
+                    <i class="fa-solid fa-leaf text-emerald-500 mr-2"></i> 管理控制台
+                </div>
+                <nav class="flex-1 p-4 space-y-2">
+                    <div class="px-4 py-2 bg-slate-800 text-white rounded-lg cursor-pointer"><i class="fa-solid fa-chart-pie mr-2 w-5"></i> 动态管理</div>
+                    <div class="px-4 py-2 hover:text-white cursor-pointer opacity-50"><i class="fa-solid fa-users mr-2 w-5"></i> 村民名册 (待开发)</div>
+                </nav>
+                <div class="p-4 border-t border-slate-800">
+                    <button @click="logout" class="w-full text-left px-4 py-2 hover:text-white"><i class="fa-solid fa-right-from-bracket mr-2"></i> 退出登录</button>
+                </div>
+            </aside>
+
+            <main class="flex-1 flex flex-col overflow-hidden bg-gray-50">
+                <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm">
+                    <h2 class="font-bold text-slate-700">社区动态概览</h2>
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        <span class="text-xs text-slate-400">系统运行正常</span>
+                    </div>
+                </header>
+
+                <div class="flex-1 overflow-auto p-8">
+                    <div class="grid grid-cols-4 gap-6 mb-8">
+                        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                            <div class="text-xs text-slate-400 mb-1">累计发布动态</div>
+                            <div class="text-3xl font-black text-slate-800">{{ stats.total || 0 }}</div>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                            <div class="text-xs text-slate-400 mb-1">今日新增</div>
+                            <div class="text-3xl font-black text-emerald-600">+{{ stats.today || 0 }}</div>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 col-span-2">
+                            <div class="text-xs text-slate-400 mb-2">热门话题分布</div>
+                            <div class="flex gap-2 flex-wrap">
+                                <span v-for="c in stats.categories" :key="c.department" class="text-xs bg-slate-100 px-2 py-1 rounded text-slate-600 border border-slate-200">
+                                    {{ c.department }}: <b>{{ c.count }}</b>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <table class="w-full text-left text-sm text-slate-600">
+                            <thead class="bg-slate-50 border-b border-slate-100 text-xs uppercase font-bold text-slate-400">
+                                <tr>
+                                    <th class="px-6 py-4">ID</th>
+                                    <th class="px-6 py-4">发布人</th>
+                                    <th class="px-6 py-4">内容概览</th>
+                                    <th class="px-6 py-4">分类</th>
+                                    <th class="px-6 py-4">时间</th>
+                                    <th class="px-6 py-4 text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                <tr v-for="post in postList" :key="post.id" class="hover:bg-slate-50 transition-colors">
+                                    <td class="px-6 py-4 font-mono text-xs">#{{ post.id }}</td>
+                                    <td class="px-6 py-4 flex items-center gap-2">
+                                        <img :src="post.user_avatar" class="w-6 h-6 rounded-full bg-slate-200">
+                                        <span>{{ post.user_name }}</span>
+                                    </td>
+                                    <td class="px-6 py-4 max-w-xs">
+                                        <div class="font-bold text-slate-800 truncate">{{ post.title }}</div>
+                                        <div class="text-xs text-slate-400 truncate">{{ post.description }}</div>
+                                    </td>
+                                    <td class="px-6 py-4"><span class="bg-slate-100 px-2 py-1 rounded text-xs">{{ post.department }}</span></td>
+                                    <td class="px-6 py-4 text-xs">{{ new Date(post.created_at).toLocaleString() }}</td>
+                                    <td class="px-6 py-4 text-right">
+                                        <button @click="deletePost(post.id)" class="text-red-500 hover:text-red-600 text-xs font-bold border border-red-100 bg-red-50 px-3 py-1 rounded hover:bg-red-100 transition">删除</button>
+                                    </td>
+                                </tr>
+                                <tr v-if="postList.length === 0">
+                                    <td colspan="6" class="text-center py-10 text-slate-300">暂无数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, onMounted } = Vue;
+        createApp({
+            setup() {
+                const token = ref(localStorage.getItem('admin_token') || '');
+                const loginForm = reactive({ username: '', password: '' });
+                const errorMsg = ref('');
+                const stats = ref({});
+                const postList = ref([]);
+
+                const handleLogin = async () => {
+                    try {
+                        const res = await fetch('/api/admin/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(loginForm)
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            token.value = data.token;
+                            localStorage.setItem('admin_token', data.token);
+                            fetchData();
+                        } else {
+                            errorMsg.value = data.message;
+                        }
+                    } catch (e) { errorMsg.value = '网络错误'; }
+                };
+
+                const logout = () => {
+                    token.value = '';
+                    localStorage.removeItem('admin_token');
+                };
+
+                const fetchData = async () => {
+                    if (!token.value) return;
+                    const headers = { 'Authorization': `Bearer ${token.value}` };
+                    
+                    // 获取统计
+                    const statsRes = await fetch('/api/admin/stats', { headers });
+                    if(statsRes.ok) stats.value = await statsRes.json();
+
+                    // 获取列表
+                    const listRes = await fetch('/api/admin/list', { headers });
+                    if(listRes.ok) postList.value = await listRes.json();
+                };
+
+                const deletePost = async (id) => {
+                    if(!confirm('确定要删除这条内容吗？')) return;
+                    const res = await fetch(`/api/admin/post/${id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token.value}` }
+                    });
+                    if (res.ok) fetchData();
+                };
+
+                onMounted(() => {
+                    if (token.value) fetchData();
+                });
+
+                return { token, loginForm, errorMsg, stats, postList, handleLogin, logout, deletePost };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
