@@ -1,33 +1,113 @@
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const jwt = require('jsonwebtoken');
+const multer = require('multer');
 const cors = require('cors');
-const bcrypt = require('bcryptjs'); // 用于密码加密
-const jwt = require('jsonwebtoken'); // 用于生成Token
-const multer = require('multer');   // 用于上传图片
+const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = 3000;
-const SECRET_KEY = 'tea_creek_secret_key_2025'; // 生产环境请放入环境变量
+const PORT = process.env.PORT || 5000;
+const SECRET_KEY = process.env.SECRET_KEY || 'tea_creek_default_secret';
 
-// === 1. 基础配置 ===
+// === 中间件配置 ===
 app.use(cors());
-app.use(express.json({ limit: '50mb' })); // 允许大的JSON包
-app.use(express.urlencoded({ extended: true }));
-// 托管静态前端文件
-app.use(express.static(path.join(__dirname, 'public')));
-// 托管上传的图片
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(express.json());
 
-// 确保上传目录存在
-if (!fs.existsSync('./uploads')) {
-    fs.mkdirSync('./uploads');
+// 确保必要的目录存在
+const publicDir = path.join(__dirname, 'public');
+const uploadsDir = path.join(__dirname, 'public/uploads');
+if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+// 静态托管 public 目录 (前端页面) 和 uploads (图片)
+app.use(express.static('public'));
+app.use('/uploads', express.static(uploadsDir));
+
+// === 数据库连接（使用绝对路径）===
+const dbPath = path.join(__dirname, 'community.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+        console.error('数据库连接失败:', err.message);
+    } else {
+        console.log('已连接至 SQLite 数据库');
+        // 初始化数据库表
+        initDatabase();
+    }
+});
+
+// === 数据库初始化函数 ===
+function initDatabase() {
+    db.serialize(() => {
+        // 创建用户表
+        db.run(`CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            avatar TEXT,
+            role TEXT DEFAULT 'villager',
+            created_at INTEGER
+        )`, (err) => {
+            if (err) console.error('创建用户表失败:', err);
+            else console.log('用户表已就绪');
+        });
+
+        // 创建帖子表
+        db.run(`CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            user_name TEXT,
+            user_avatar TEXT,
+            title TEXT,
+            description TEXT,
+            department TEXT,
+            images TEXT,
+            created_at INTEGER
+        )`, (err) => {
+            if (err) console.error('创建帖子表失败:', err);
+            else console.log('帖子表已就绪');
+        });
+
+        // 创建评论表
+        db.run(`CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER,
+            user_id INTEGER,
+            user_name TEXT,
+            user_avatar TEXT,
+            content TEXT,
+            created_at INTEGER
+        )`, (err) => {
+            if (err) console.error('创建评论表失败:', err);
+            else console.log('评论表已就绪');
+        });
+
+        // 创建默认管理员账号（如果不存在）
+        db.get("SELECT * FROM users WHERE role = 'admin'", (err, row) => {
+            if (err) {
+                console.error('查询管理员失败:', err);
+            } else if (!row) {
+                db.run(`INSERT INTO users (username, password, avatar, role, created_at) VALUES (?, ?, ?, ?, ?)`,
+                    ['admin', 'admin123', '', 'admin', Date.now()],
+                    (err) => {
+                        if (err) console.error('创建管理员失败:', err);
+                        else console.log('✅ 已创建默认管理员账号: admin / admin123');
+                    }
+                );
+            } else {
+                console.log('管理员账号已存在');
+            }
+        });
+    });
 }
 
-// === 2. 图片上传配置 (Multer) ===
+// === 图片上传配置 (Multer) ===
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
+    destination: (req, file, cb) => {
+        const dir = path.join(__dirname, 'public/uploads');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, uniqueSuffix + path.extname(file.originalname));
@@ -35,235 +115,259 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// === 3. 数据库初始化 ===
-const db = new sqlite3.Database('./community.db');
-
-db.serialize(() => {
-    // 用户表
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password TEXT,
-        avatar TEXT,
-        phone TEXT,
-        role TEXT DEFAULT 'user', -- user:村民, admin:管理员
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // 帖子表
-    db.run(`CREATE TABLE IF NOT EXISTS posts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        user_name TEXT,
-        user_avatar TEXT,
-        title TEXT,
-        description TEXT,
-        department TEXT, -- 板块/标签
-        images TEXT,     -- 存JSON字符串
-        views INTEGER DEFAULT 0,
-        likes INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // 评论表
-    db.run(`CREATE TABLE IF NOT EXISTS comments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        post_id INTEGER,
-        user_id INTEGER,
-        user_name TEXT,
-        user_avatar TEXT,
-        content TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // 初始化管理员账号 (如果不存在)
-    const adminPass = bcrypt.hashSync('admin123', 10);
-    db.run(`INSERT OR IGNORE INTO users (username, password, role, avatar, phone) 
-            VALUES ('村委管理员', '${adminPass}', 'admin', 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin', '13800138000')`);
-});
-
-// === 4. 中间件：验证 Token ===
+// === 鉴权中间件 ===
 const authenticateToken = (req, res, next) => {
-    // 简单处理：实际项目中前端要在 Header 传 Authorization: Bearer <token>
-    // 这里为了配合你的前端代码，我们兼容直接传 user_id 的模拟方式，
-    // 但为了安全性，建议后续前端改用 Token。
-    // 目前阶段直接放行，依靠 user_id 参数，下一阶段升级。
-    next();
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    if (!token) return res.sendStatus(401);
+
+    jwt.verify(token, SECRET_KEY, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
 };
 
-// === 5. API 接口 ===
+// ================= API 接口开发 =================
 
-// [POST] 注册/登录 (二合一)
+// 健康检查接口
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        message: '茶溪有灵社区后端服务运行正常',
+        timestamp: Date.now()
+    });
+});
+
+// 1. 图片上传 (支持多图)
+app.post('/api/upload', upload.array('images',), (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ success: false, message: '未上传文件' });
+    }
+    const imageUrls = req.files.map(file => `/uploads/${file.filename}`);
+    res.json({ success: true, urls: imageUrls });
+});
+
+// 2. 用户登录 (自动注册)
 app.post('/api/login', (req, res) => {
-    const { username, password } = req.body;
-    
-    db.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
-        if (err) return res.status(500).json({ msg: "数据库错误" });
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ message: '用户名必填' });
 
-        if (user) {
-            // 用户存在，校验密码 (如果是管理员或绑定了密码的用户)
-            if (user.password && password) {
-                const valid = bcrypt.compareSync(password, user.password);
-                if (!valid) return res.json({ success: false, message: "密码错误" });
-            }
+    db.get("SELECT * FROM users WHERE username = ?", [username], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+
+        if (row) {
             // 登录成功
-            const token = jwt.sign({ id: user.id, role: user.role }, SECRET_KEY);
-            res.json({ success: true, user, token });
+            const token = jwt.sign({ id: row.id, role: row.role, name: row.username }, SECRET_KEY, { expiresIn: '24h' });
+            res.json({ success: true, token, userProfile: row });
         } else {
-            // 用户不存在，自动注册 (普通村民)
-            // 如果尝试注册管理员账号名称，拦截
-            if(username === '村委管理员') return res.json({ success: false, message: "该账号受保护" });
-
-            const defaultAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${Date.now()}`;
-            // 普通用户默认无密码，或者你可以保存 password
-            const hash = password ? bcrypt.hashSync(password, 10) : null;
-            
-            db.run("INSERT INTO users (username, password, role, avatar) VALUES (?, ?, 'user', ?)", 
-                [username, hash, defaultAvatar], 
+            // 自动注册
+            const newUser = {
+                username,
+                password: 'password', // 默认密码
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
+                role: 'villager',
+                created_at: Date.now()
+            };
+            db.run(`INSERT INTO users (username, password, avatar, role, created_at) VALUES (?, ?, ?, ?, ?)`,
+                [newUser.username, newUser.password, newUser.avatar, newUser.role, newUser.created_at],
                 function(err) {
-                    if (err) return res.json({ success: false, message: "注册失败" });
-                    const newUser = { id: this.lastID, username, role: 'user', avatar: defaultAvatar };
-                    const token = jwt.sign({ id: newUser.id, role: 'user' }, SECRET_KEY);
-                    res.json({ success: true, user: newUser, token });
+                    if (err) return res.status(500).json({ error: err.message });
+                    const token = jwt.sign({ id: this.lastID, role: 'villager', name: username }, SECRET_KEY, { expiresIn: '24h' });
+                    res.json({ success: true, token, userProfile: { id: this.lastID, ...newUser } });
                 }
             );
         }
     });
 });
 
-// [POST] 绑定手机号
-app.post('/api/user/bind-phone', (req, res) => {
-    const { user_id, phone } = req.body;
-    if (!/^1\d{10}$/.test(phone)) return res.json({ success: false, message: "手机号格式错误" });
+// 3. 发布动态 (需鉴权)
+app.post('/api/submit', authenticateToken, (req, res) => {
+    const { title, description, department, images } = req.body;
+    // user info from jwt middleware
+    const { id, name } = req.user; 
+    
+    // 获取用户当前头像 (为了数据一致性，也可以直接读库)
+    db.get("SELECT avatar FROM users WHERE id = ?", [id], (err, userRow) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        
+        const userAvatar = userRow ? userRow.avatar : '';
+        const imageStr = JSON.stringify(images || []);
+        const createdAt = Date.now();
 
-    db.run("UPDATE users SET phone = ? WHERE id = ?", [phone, user_id], function(err) {
-        if (err) return res.json({ success: false, message: "绑定失败或号码已被使用" });
-        res.json({ success: true });
+        const stmt = db.prepare(`INSERT INTO posts (user_id, user_name, user_avatar, title, description, department, images, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        stmt.run(id, name, userAvatar, title, description, department, imageStr, createdAt, function(err) {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, postId: this.lastID });
+        });
+        stmt.finalize();
     });
 });
 
-// [POST] 图片上传 (返回 URL)
-app.post('/api/upload', upload.single('file'), (req, res) => {
-    if (!req.file) return res.json({ success: false });
-    // 返回图片访问路径
-    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-    res.json({ success: true, url: fileUrl });
-});
-
-// [GET] 获取帖子列表 (支持搜索 & 筛选)
+// 4. 获取动态列表 (Feed)
 app.get('/api/feed', (req, res) => {
-    const { tag, search } = req.query;
-    let sql = `
-        SELECT p.*, 
-        (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comments_count
-        FROM posts p 
-        WHERE 1=1 
-    `;
+    const { tag, user_id } = req.query;
+    let sql = "SELECT * FROM posts WHERE 1=1";
     let params = [];
 
-    // 筛选板块
     if (tag && tag !== '全部') {
-        sql += ` AND department = ?`;
+        sql += " AND department = ?";
         params.push(tag);
     }
-
-    // 搜索 (标题、描述、作者名)
-    if (search) {
-        sql += ` AND (title LIKE ? OR description LIKE ? OR user_name LIKE ?)`;
-        const likeStr = `%${search}%`;
-        params.push(likeStr, likeStr, likeStr);
+    if (user_id) {
+        sql += " AND user_id = ?";
+        params.push(user_id);
     }
 
-    sql += ` ORDER BY created_at DESC`;
+    // 逻辑：村务公开置顶 (department='村务公开' 排在前面)，其余按时间倒序
+    sql += " ORDER BY CASE WHEN department = '村务公开' THEN 0 ELSE 1 END, created_at DESC";
 
     db.all(sql, params, (err, rows) => {
-        if (err) return res.json([]);
-        const feed = rows.map(r => ({
-            ...r,
-            images: JSON.parse(r.images || '[]'),
-            // 简单处理：SQLite没有布尔值，这里手动处理
-            isLiked: false 
+        if (err) return res.status(500).json({ error: err.message });
+        // 解析 images JSON 字符串
+        const posts = rows.map(post => ({
+            ...post,
+            images: JSON.parse(post.images || '[]')
         }));
-        res.json(feed);
+        res.json(posts);
     });
 });
 
-// [POST] 发布帖子
-app.post('/api/submit', (req, res) => {
-    const { user_id, title, description, department, images } = req.body;
+// 5. 获取帖子详情
+app.get('/api/post/:id', (req, res) => {
+    db.get("SELECT * FROM posts WHERE id = ?", [req.params.id], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(404).json({ message: '帖子不存在' });
+        row.images = JSON.parse(row.images || '[]');
+        res.json(row);
+    });
+});
 
-    // 1. 获取用户信息
-    db.get("SELECT * FROM users WHERE id = ?", [user_id], (err, user) => {
-        if (!user) return res.json({ success: false, message: "用户未登录" });
+// 6. 获取评论列表
+app.get('/api/comments/:postId', (req, res) => {
+    const { postId } = req.params;
+    db.all("SELECT * FROM comments WHERE post_id = ? ORDER BY created_at DESC", [postId], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows || []);
+    });
+});
 
-        // 2. 权限拦截：只有管理员能发“村务公开”
-        if (department === '村务公开' && user.role !== 'admin') {
-            return res.json({ success: false, message: "权限不足：仅管理员可发布村务信息" });
+// 7. 发布评论 (需鉴权)
+app.post('/api/comments', authenticateToken, (req, res) => {
+    const { postId, content } = req.body;
+    const { id, name } = req.user;
+
+    if (!content || !postId) {
+        return res.status(400).json({ success: false, message: '内容和帖子ID必填' });
+    }
+
+    db.get("SELECT avatar FROM users WHERE id = ?", [id], (err, userRow) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        
+        const userAvatar = userRow ? userRow.avatar : '';
+        const createdAt = Date.now();
+
+        const stmt = db.prepare(`INSERT INTO comments (post_id, user_id, user_name, user_avatar, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`);
+        stmt.run(postId, id, name, userAvatar, content, createdAt, function(err) {
+            if (err) return res.status(500).json({ success: false, error: err.message });
+            res.json({ success: true, commentId: this.lastID });
+        });
+        stmt.finalize();
+    });
+});
+
+// 8. 删除评论 (需鉴权)
+app.delete('/api/comments/:id', authenticateToken, (req, res) => {
+    const commentId = req.params.id;
+    const userId = req.user.id;
+
+    db.get("SELECT user_id FROM comments WHERE id = ?", [commentId], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(404).json({ message: '评论不存在' });
+
+        if (row.user_id !== userId && req.user.role !== 'admin') {
+            return res.status(403).json({ message: '无权删除此评论' });
         }
 
-        // 3. 存入数据库
-        const stmt = db.prepare(`INSERT INTO posts (user_id, user_name, user_avatar, title, description, department, images) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-        stmt.run(user_id, user.username, user.avatar, title, description, department, JSON.stringify(images), function(err) {
-            if (err) return res.json({ success: false, message: "发布失败" });
+        db.run("DELETE FROM comments WHERE id = ?", [commentId], function(err) {
+            if (err) return res.status(500).json({ error: err.message });
             res.json({ success: true });
         });
     });
 });
 
-// [GET] 详情页
-app.get('/api/post/:id', (req, res) => {
-    const postId = req.params.id;
-    // 增加浏览量
-    db.run("UPDATE posts SET views = views + 1 WHERE id = ?", [postId]);
+// ================= 管理员接口 =================
 
-    db.get("SELECT * FROM posts WHERE id = ?", [postId], (err, post) => {
-        if (!post) return res.json(null);
-        
-        // 获取评论
-        db.all("SELECT * FROM comments WHERE post_id = ? ORDER BY created_at DESC", [postId], (err, comments) => {
-            res.json({
-                ...post,
-                images: JSON.parse(post.images || '[]'),
-                commentList: comments.map(c => ({
-                    id: c.id,
-                    user: c.user_name,
-                    avatar: c.user_avatar,
-                    content: c.content,
-                    time: new Date(c.created_at).toLocaleString()
-                })),
-                likes: post.likes
-            });
-        });
+// Admin Login
+app.post('/api/admin/login', (req, res) => {
+    const { username, password } = req.body;
+    db.get("SELECT * FROM users WHERE username = ? AND password = ? AND role = 'admin'", [username, password], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(401).json({ success: false, message: '认证失败' });
+
+        const token = jwt.sign({ id: row.id, role: 'admin', name: row.username }, SECRET_KEY, { expiresIn: '12h' });
+        res.json({ success: true, token });
     });
 });
 
-// [POST] 评论
-app.post('/api/post/:id/comment', (req, res) => {
-    const { user_id, content } = req.body;
-    db.get("SELECT * FROM users WHERE id = ?", [user_id], (err, user) => {
-        if (!user) return res.json({ success: false });
-        db.run("INSERT INTO comments (post_id, user_id, user_name, user_avatar, content) VALUES (?, ?, ?, ?, ?)",
-            [req.params.id, user_id, user.username, user.avatar, content],
-            function(err) {
-                res.json({ success: true });
-            }
-        );
+// Admin Stats
+app.get('/api/admin/stats', authenticateToken, (req, res) => {
+    if (req.user.role !== 'admin') return res.sendStatus(403);
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    const p1 = new Promise(resolve => db.get("SELECT COUNT(*) as count FROM posts", (err, r) => resolve(r ? r.count : 0)));
+    const p2 = new Promise(resolve => db.get("SELECT COUNT(*) as count FROM posts WHERE created_at >= ?", [startOfDay], (err, r) => resolve(r ? r.count : 0)));
+    const p3 = new Promise(resolve => db.all("SELECT department, COUNT(*) as count FROM posts GROUP BY department", (err, r) => resolve(r || [])));
+
+    Promise.all([p1, p2, p3]).then(([total, today, cats]) => {
+        res.json({ total, today, categories: cats });
     });
 });
 
-// [POST] 点赞
-app.post('/api/post/:id/like', (req, res) => {
-    const postId = req.params.id;
-    const { isLiked } = req.body; // 前端传当前是点赞还是取消
-    const change = isLiked ? 1 : -1;
-    
-    db.run(`UPDATE posts SET likes = likes + ? WHERE id = ?`, [change, postId], function(err) {
-        res.json({ success: true });
+// Admin List & Delete
+app.get('/api/admin/list', authenticateToken, (req, res) => {
+    if (req.user.role !== 'admin') return res.sendStatus(403);
+    db.all("SELECT * FROM posts ORDER BY created_at DESC", [], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        rows.forEach(r => r.images = JSON.parse(r.images || '[]'));
+        res.json(rows);
     });
 });
 
-// 启动服务
-app.listen(PORT, () => {
-    console.log(`🚀 后端服务已启动: http://localhost:${PORT}`);
-    console.log(`📂 前端页面请访问: http://localhost:${PORT}/index.html`);
+app.delete('/api/admin/post/:id', authenticateToken, (req, res) => {
+    if (req.user.role !== 'admin') return res.sendStatus(403);
+    db.run("DELETE FROM posts WHERE id = ?", [req.params.id], function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// 路由兜底：访问 /admin 返回 admin.html
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/admin.html'));
+});
+
+// 根路径返回首页
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public/index.html'));
+});
+
+// 启动服务（监听所有网络接口）
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 茶溪有灵服务端运行在端口 ${PORT}`);
+    console.log(`📱 村民端入口: http://localhost:${PORT}/`);
+    console.log(`🔧 管理端入口: http://localhost:${PORT}/admin`);
+    console.log(`💚 健康检查: http://localhost:${PORT}/api/health`);
+});
+
+// 优雅关闭
+process.on('SIGTERM', () => {
+    console.log('收到 SIGTERM 信号，正在关闭数据库连接...');
+    db.close((err) => {
+        if (err) console.error('关闭数据库失败:', err);
+        else console.log('数据库连接已关闭');
+        process.exit(0);
+    });
 });
